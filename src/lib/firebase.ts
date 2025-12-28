@@ -12,7 +12,21 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase (singleton pattern)
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-const db = getDatabase(app);
+// Prevent crash during build if env vars are missing
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let app: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let db: any;
+
+try {
+    if (typeof window === 'undefined' && !firebaseConfig.databaseURL) {
+        console.warn("Firebase config missing during server build. Skipping.");
+    } else {
+        app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+        db = getDatabase(app);
+    }
+} catch (e) {
+    console.error("Firebase Initialization Error:", e);
+}
 
 export { app, db };
