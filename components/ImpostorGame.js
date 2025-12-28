@@ -36,10 +36,14 @@ export default function ImpostorGame() {
     // Initialize Socket
     useEffect(() => {
         const socketInitializer = async () => {
-            await fetch('/api/socket');
-            // Explicitly define path in options object and first argument
-            socket = io({
-                path: '/api/socket',
+            // Connect to external socket URL if defined (for Hybrid deployment), otherwise default to local
+            const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || undefined;
+            const SOCKET_PATH = process.env.NEXT_PUBLIC_SOCKET_PATH || '/api/socket';
+
+            await fetch(SOCKET_URL ? `${SOCKET_URL}${SOCKET_PATH}` : '/api/socket').catch(() => { });
+
+            socket = io(SOCKET_URL, {
+                path: SOCKET_PATH,
                 addTrailingSlash: false,
                 reconnection: true,
             });

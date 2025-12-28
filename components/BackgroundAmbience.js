@@ -9,7 +9,8 @@ export default function BackgroundAmbience() {
     useEffect(() => {
         const fetchImages = async () => {
             try {
-                const res = await fetch('/api/images');
+
+                const res = await fetch('/images.json');
                 if (res.ok) {
                     const data = await res.json();
                     setImages(data);

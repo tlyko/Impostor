@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "node server.js",
-    "build": "next build",
+    "dev": "node scripts/generate-images.js && node server.js",
+    "build": "node scripts/generate-images.js && next build",
     "start": "NODE_ENV=production node server.js",
     "lint": "eslint"
   },
