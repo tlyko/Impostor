@@ -1,8 +1,6 @@
 import Lobby from '@/components/Lobby';
 import MosaicBackground from '@/components/MosaicBackground';
 
-export const runtime = 'edge';
-
 export default function Home() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center p-4 relative">

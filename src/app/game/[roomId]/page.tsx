@@ -1,8 +1,6 @@
 import GameRoom from '@/components/GameRoom';
 import MosaicBackground from '@/components/MosaicBackground';
 
-export const runtime = 'edge';
-
 interface PageProps {
     params: Promise<{
         roomId: string;
