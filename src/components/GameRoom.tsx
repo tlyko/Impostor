@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { db } from '@/lib/firebase';
 import { ref, onValue, set, update, get } from 'firebase/database';
 import { useRouter } from 'next/navigation';
-
+import { useSoundEffects } from '@/hooks/useSoundEffects';
 import RoleReveal from './RoleReveal';
 import VotingPanel from './VotingPanel';
 
@@ -20,6 +20,8 @@ interface GameState {
     impostorId: string;
     speakingOrder?: string[];
     players: Record<string, Player>;
+    votes?: Record<string, string>; // voterId -> targetId
+    suspicions?: Record<string, string>; // voterId -> targetId (Live Pre-vote)
 }
 
 interface GameRoomProps {
@@ -34,6 +36,13 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
     const [loading, setLoading] = useState(true);
     const [hasVoted, setHasVoted] = useState(false);
 
+    // Audio Hook
+    const { playJoin, playStart, playVote, playWin } = useSoundEffects();
+
+    // Track previous state for sound triggers
+    const prevStatusRef = useRef<string>('');
+    const prevPlayerCountRef = useRef<number>(0);
+
     // Load player ID from local storage
     useEffect(() => {
         if (typeof window !== 'undefined') {
@@ -41,13 +50,34 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
         }
     }, []);
 
-    // Sync game state
+    // Sync game state & Handle Sounds
     useEffect(() => {
         const roomRef = ref(db, `rooms/${roomId}`);
         const unsubscribe = onValue(roomRef, (snapshot) => {
             const data = snapshot.val();
             if (data) {
                 setGameState(data);
+
+                // --- SOUND LOGIC ---
+                const status = data.status;
+                const playerCount = Object.keys(data.players || {}).length;
+
+                // 1. Join Sound (Only in Lobby, if count increases)
+                if (status === 'LOBBY' && playerCount > prevPlayerCountRef.current && prevPlayerCountRef.current > 0) {
+                    playJoin();
+                }
+
+                // 2. Phase Change Sounds
+                if (prevStatusRef.current && prevStatusRef.current !== status) {
+                    if (prevStatusRef.current === 'LOBBY' && status === 'PLAYING') playStart();
+                    if (status === 'VOTING') playVote();
+                    if (status === 'ENDED') playWin();
+                }
+
+                prevStatusRef.current = status;
+                prevPlayerCountRef.current = playerCount;
+                // -------------------
+
             } else {
                 // Room deleted or doesn't exist
                 router.push('/');
@@ -56,7 +86,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
         });
 
         return () => unsubscribe();
-    }, [roomId, router]);
+    }, [roomId, router, playJoin, playStart, playVote, playWin]);
 
     if (loading || !gameState || !playerId) {
         return (
@@ -68,8 +98,44 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
 
     const currentPlayer = gameState.players[playerId];
     const isHost = currentPlayer?.isHost;
-    const playersList = Object.entries(gameState.players);
     const isImpostor = gameState.impostorId === playerId;
+
+    // Calculate derived vote counts & suspicions
+    const voteCounts: Record<string, number> = {};
+    const votersForHelper: Record<string, string[]> = {}; // targetId -> [voterName, voterName]
+    const suspectsForHelper: Record<string, string[]> = {}; // targetId -> [suspectorName, suspectorName]
+
+    // Process Confirmed Votes
+    if (gameState.votes) {
+        Object.entries(gameState.votes).forEach(([voterId, targetId]) => {
+            voteCounts[targetId] = (voteCounts[targetId] || 0) + 1;
+
+            const voterName = gameState.players[voterId]?.name || 'Nieznany';
+            if (!votersForHelper[targetId]) votersForHelper[targetId] = [];
+            votersForHelper[targetId].push(voterName);
+        });
+    }
+
+    // Process Live Suspicions (Only if NOT voted yet)
+    if (gameState.suspicions) {
+        Object.entries(gameState.suspicions).forEach(([suspectorId, targetId]) => {
+            // If this person has already confirmed vote, ignore logic here (handled above)
+            if (gameState.votes && gameState.votes[suspectorId]) return;
+
+            const suspectorName = gameState.players[suspectorId]?.name || 'Nieznany';
+            if (!suspectsForHelper[targetId]) suspectsForHelper[targetId] = [];
+            suspectsForHelper[targetId].push(suspectorName);
+        });
+    }
+
+    const playersList = Object.entries(gameState.players).map(([pid, p]) => ({
+        ...p,
+        id: pid, // Add player ID for easier mapping
+        votes: voteCounts[pid] || 0,
+        voters: votersForHelper[pid] || [],
+        suspectedBy: suspectsForHelper[pid] || [] // New field
+    }));
+
 
     const handleStartGame = async (mode: 'MANUAL' | 'RANDOM') => {
         if (!isHost) return;
@@ -101,15 +167,9 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
             word: secretWord,
             impostorId: randomImpostorId,
             speakingOrder: playerIds.map(id => gameState.players[id].name).sort(() => Math.random() - 0.5),
-            // Reset votes
+            votes: {}, // Reset votes map
+            suspicions: {} // Reset suspicions map
         });
-
-        // Reset votes for all players
-        const updates: Record<string, any> = {};
-        playerIds.forEach(pid => {
-            updates[`players/${pid}/votes`] = 0;
-        });
-        await update(ref(db, `rooms/${roomId}`), updates);
     };
 
     const handleStartVoting = async () => {
@@ -119,20 +179,19 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
     };
 
     const handleVote = async (targetId: string) => {
-        // Increment target votes
-        const targetRef = ref(db, `rooms/${roomId}/players/${targetId}/votes`);
-        // We need a transaction or just simple get/set. 
-        // Since it's realtime, transaction is better but simple set is easier for now.
-        // Let's use transaction-like update by reading current state from prop
-        // Note: this might have race conditions in high concurrency but good for casual.
-        const currentVotes = gameState.players[targetId].votes || 0;
-        await set(targetRef, currentVotes + 1);
+        if (!playerId) return;
+        // Record exact vote: Who -> Whom
+        await update(ref(db, `rooms/${roomId}/votes`), {
+            [playerId]: targetId
+        });
+        setHasVoted(true);
+    };
 
-        // We could track "who voted" to prevent double voting locally or in DB.
-        // For simplicity, we just use local state in VotingPanel or localStorage?
-        // Requirement: "show results after voting". 
-        // Let's just track locally "hasVoted" for basic UX.
-        localStorage.setItem(`voted_${roomId}_${Date.now()}`, 'true'); // Simple hack
+    const handleSuspect = async (targetId: string) => {
+        if (!playerId || hasVoted) return; // Don't update suspicion if already voted
+        await update(ref(db, `rooms/${roomId}/suspicions`), {
+            [playerId]: targetId
+        });
     };
 
 
@@ -177,8 +236,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
                     <h1 className="text-3xl font-bold text-center mb-8">Oczekiwanie na graczy...</h1>
 
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
-                        {playersList.map(([pid, p]) => (
-                            <div key={pid} className="bg-black/40 p-4 rounded-lg flex items-center gap-3 border border-white/10 animate-fade-in">
+                        {playersList.map((p) => (
+                            <div key={p.name} className="bg-black/40 p-4 rounded-lg flex items-center gap-3 border border-white/10 animate-fade-in">
                                 <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-400 to-purple-500 flex items-center justify-center font-bold text-sm">
                                     {p.name.charAt(0)}
                                 </div>
@@ -247,13 +306,34 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
                             </div>
                         )}
 
-                        <h3 className="text-center text-gray-400 mb-4">Gracze w grze</h3>
+                        <h3 className="text-center text-gray-400 mb-4">Gracze w grze (Kliknij, aby podejrzewać 👀)</h3>
                         <div className="flex flex-wrap justify-center gap-2">
-                            {playersList.map(([pid, p]) => (
-                                <span key={pid} className="px-3 py-1 bg-black/40 rounded-full border border-white/10 text-sm text-gray-300">
-                                    {p.name}
-                                </span>
-                            ))}
+                            {playersList.map((p) => {
+                                const isSuspectedByMe = p.suspectedBy.includes(gameState.players[playerId]?.name || '');
+                                return (
+                                    <button
+                                        key={p.name}
+                                        onClick={() => handleSuspect(p.id)}
+                                        className={`
+                                            relative px-4 py-2 rounded-full border transition-all flex flex-col items-center
+                                            ${isSuspectedByMe
+                                                ? 'bg-yellow-500/20 border-yellow-500 text-yellow-200 shadow-[0_0_10px_rgba(234,179,8,0.3)]'
+                                                : 'bg-black/40 border-white/10 text-gray-300 hover:bg-white/10 hover:scale-105'}
+                                        `}
+                                    >
+                                        <span className="font-bold">{p.name}</span>
+                                        {p.suspectedBy.length > 0 && (
+                                            <div className="flex flex-wrap gap-1 mt-1 justify-center max-w-[150px]">
+                                                {p.suspectedBy.map((name, i) => (
+                                                    <span key={i} className="text-[9px] bg-yellow-500/30 text-yellow-200 px-1.5 rounded-sm border border-yellow-500/20">
+                                                        👀 {name}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </button>
+                                );
+                            })}
                         </div>
                     </div>
 
@@ -270,10 +350,9 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
             {gameState.status === 'VOTING' && (
                 <div className="w-full max-w-xl bg-black/60 backdrop-blur-xl p-6 rounded-2xl border border-white/20 shadow-2xl">
                     <VotingPanel
-                        players={gameState.players}
+                        players={playersList}
                         onVote={(targetId) => {
                             handleVote(targetId);
-                            setHasVoted(true);
                         }}
                         hasVoted={hasVoted}
                     />
@@ -312,13 +391,20 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
                         <h3 className="text-lg font-bold mb-4 border-b border-white/10 pb-2">Wyniki Głosowania</h3>
                         <div className="flex flex-col gap-2">
                             {playersList
-                                .sort(([, a], [, b]) => b.votes - a.votes)
-                                .map(([pid, p]) => (
-                                    <div key={pid} className="flex justify-between items-center p-2 rounded hover:bg-white/5">
-                                        <span className={pid === gameState.impostorId ? 'text-red-400 font-bold' : 'text-gray-300'}>
-                                            {p.name} {pid === gameState.impostorId && '(Impostor)'}
-                                        </span>
-                                        <span className="font-mono bg-white/20 px-2 py-1 rounded text-sm">{p.votes} głosów</span>
+                                .sort((a, b) => b.votes - a.votes)
+                                .map((p) => (
+                                    <div key={p.id} className="flex justify-between items-center p-3 rounded-lg hover:bg-white/5 bg-white/5 border border-white/5">
+                                        <div className="flex flex-col">
+                                            <span className={`font-bold ${p.id === gameState.impostorId ? 'text-red-400' : 'text-gray-300'}`}>
+                                                {p.name} {p.id === gameState.impostorId && '(Impostor)'}
+                                            </span>
+                                            {p.voters.length > 0 && (
+                                                <div className="text-xs text-gray-500 mt-1">
+                                                    Głosowali: {p.voters.join(', ')}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <span className="font-mono bg-white/20 px-3 py-1 rounded text-sm font-bold">{p.votes}</span>
                                     </div>
                                 ))
                             }
