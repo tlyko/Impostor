@@ -18,6 +18,7 @@ interface GameState {
     status: 'LOBBY' | 'PLAYING' | 'VOTING' | 'ENDED';
     word: string;
     impostorId: string;
+    speakingOrder?: string[];
     players: Record<string, Player>;
 }
 
@@ -92,6 +93,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
             status: 'PLAYING',
             word: secretWord,
             impostorId: randomImpostorId,
+            speakingOrder: playerIds.map(id => gameState.players[id].name).sort(() => Math.random() - 0.5),
             // Reset votes
         });
 
@@ -140,6 +142,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
             status: 'LOBBY',
             word: '',
             impostorId: '',
+            speakingOrder: [],
         });
         setHasVoted(false);
     };
@@ -218,6 +221,25 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
                     <RoleReveal isImpostor={isImpostor} secretWord={gameState.word} />
 
                     <div className="w-full bg-white/5 backdrop-blur-sm p-6 rounded-xl border border-white/10 mt-8">
+                        {gameState.speakingOrder && (
+                            <div className="mb-6 pb-6 border-b border-white/10">
+                                <h3 className="text-center text-gray-400 mb-4 uppercase tracking-widest text-sm">Kolejność mówienia (Discord)</h3>
+                                <div className="flex flex-wrap justify-center gap-3">
+                                    {gameState.speakingOrder.map((name, index) => (
+                                        <div key={index} className="flex items-center gap-2">
+                                            <span className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-xs font-mono text-gray-400">
+                                                {index + 1}
+                                            </span>
+                                            <span className="font-bold text-gray-200">{name}</span>
+                                            {index < gameState.speakingOrder!.length - 1 && (
+                                                <span className="text-gray-600">→</span>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         <h3 className="text-center text-gray-400 mb-4">Gracze w grze</h3>
                         <div className="flex flex-wrap justify-center gap-2">
                             {playersList.map(([pid, p]) => (
