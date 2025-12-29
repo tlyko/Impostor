@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "firebase": "^12.7.0",
-    "next": "16.1.1",
-    "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "next": "15.0.0",
+    "react": "19.0.0-rc",
+    "react-dom": "19.0.0-rc"
   },
   "devDependencies": {
     "@cloudflare/next-on-pages": "^1.13.16",
