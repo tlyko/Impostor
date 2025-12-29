@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { db } from '@/lib/firebase';
 import { ref, onValue, set, update, get } from 'firebase/database';
 import { useRouter } from 'next/navigation';
-import { POLISH_WORDS } from '@/data/polishWords';
+
 import RoleReveal from './RoleReveal';
 import VotingPanel from './VotingPanel';
 
@@ -79,7 +79,14 @@ const GameRoom: React.FC<GameRoomProps> = ({ roomId }) => {
             if (!manualWord.trim()) return alert('Wpisz słowo!');
             secretWord = manualWord;
         } else {
-            secretWord = POLISH_WORDS[Math.floor(Math.random() * POLISH_WORDS.length)];
+            try {
+                const res = await fetch('/api/random-word');
+                const data = await res.json();
+                secretWord = data.word;
+            } catch (err) {
+                console.error('Failed to fetch word', err);
+                secretWord = 'Błąd'; // Fallback or handle error
+            }
         }
 
         // Pick Impostor
